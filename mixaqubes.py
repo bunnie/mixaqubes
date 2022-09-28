@@ -19,7 +19,7 @@ pyglet.options['debug_media'] = False
 from pyglet.media import buffered_logger as bl
 
 
-def draw_rect(x, y, width, height, color=(1, 1, 1, 1)):
+def draw_rect(x, y, width, height, color=(192, 192, 192, 192)):
     pyglet.graphics.draw(
         4,
         GL_LINE_LOOP,
@@ -59,7 +59,7 @@ class Button(Control):
         if self.charged:
             draw_rect(self.x, self.y, self.width, self.height)
         else:
-            draw_rect(self.x, self.y, self.width, self.height, color=(1, 0, 0, 1))
+            draw_rect(self.x, self.y, self.width, self.height, color=(192, 0, 0, 192))
         self.draw_label()
 
     def on_mouse_press(self, x, y, button, modifiers):
@@ -157,13 +157,13 @@ Slider.register_event_type('on_change')
 
 
 class PlayerWindow(pyglet.window.Window):
-    GUI_WIDTH = 400
-    GUI_HEIGHT = 40
+    GUI_WIDTH = 1000
+    GUI_HEIGHT = 400
     GUI_PADDING = 4
     GUI_BUTTON_HEIGHT = 16
 
-    def __init__(self, player):
-        super(PlayerWindow, self).__init__(caption='Media Player',
+    def __init__(self, player, clips):
+        super(PlayerWindow, self).__init__(caption='Mixaqubes',
                                            visible=False,
                                            resizable=True)
         # We only keep a weakref to player as we are about to push ourself
@@ -201,18 +201,25 @@ class PlayerWindow(pyglet.window.Window):
         ]
 
         x = self.window_button.x + self.window_button.width + self.GUI_PADDING
-        i = 0
-        for screen in self.display.get_screens():
-            screen_button = TextButton(self)
-            screen_button.x = x
-            screen_button.y = self.GUI_PADDING
-            screen_button.height = self.GUI_BUTTON_HEIGHT
-            screen_button.width = 80
-            screen_button.text = 'Screen %d' % (i + 1)
-            screen_button.on_press = lambda screen=screen: self.set_fullscreen(True, screen)
-            self.controls.append(screen_button)
-            i += 1
-            x += screen_button.width + self.GUI_PADDING
+        # i = 0
+        # for screen in self.display.get_screens():
+        #     screen_button = TextButton(self)
+        #     screen_button.x = x
+        #     screen_button.y = self.GUI_PADDING
+        #     screen_button.height = self.GUI_BUTTON_HEIGHT
+        #     screen_button.width = 80
+        #     screen_button.text = 'Screen %d' % (i + 1)
+        #     screen_button.on_press = lambda screen=screen: self.set_fullscreen(True, screen)
+        #     self.controls.append(screen_button)
+        #     i += 1
+        #     x += screen_button.width + self.GUI_PADDING
+
+        self.clips = clips
+        self.clip_durations = []
+        for clip in clips:
+            self.clip_durations += [clip.duration]
+        self.active_clip = None
+        self.active_clip_duration = None
 
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -225,7 +232,11 @@ class PlayerWindow(pyglet.window.Window):
 
     def on_player_eos(self):
         self.gui_update_state()
-        pyglet.clock.schedule_once(self.auto_close, 0.1)
+        # pyglet.clock.schedule_once(self.auto_close, 0.1)
+        if self.active_clip != None:
+            self.player.queue(self.active_clip)
+            self.player.play()
+            self.gui_update_source()
         return True
 
     def gui_update_source(self):
@@ -233,6 +244,9 @@ class PlayerWindow(pyglet.window.Window):
             source = self.player.source
             self.slider.min = 0.
             self.slider.max = source.duration
+        else:
+            self.slider.min = 0.
+            self.slider.max = 100.
         self.gui_update_state()
 
     def gui_update_state(self):
@@ -300,6 +314,22 @@ class PlayerWindow(pyglet.window.Window):
             self.player.seek(0)
         elif symbol == key.RIGHT:
             self.player.next_source()
+        elif symbol == key._1:
+            print("got 1")
+            if len(self.clips) >= 1:
+                self.active_clip = self.clips[0]
+                self.active_clip_duration = self.clip_durations[0]
+                print("set active clip to 1")
+        elif symbol == key._2:
+            print("got 2")
+            if len(self.clips) >= 2:
+                self.active_clip = self.clips[1]
+                self.active_clip_duration = self.clip_durations[1]
+                print("set active clip to 2")
+        if self.player.playing == False and self.active_clip != None:
+            self.player.queue(self.active_clip)
+            self.player.play()
+            self.gui_update_source()
 
     def on_close(self):
         self.player.pause()
@@ -363,16 +393,19 @@ def main():
     set_logging_parameters(dbg_file, debug)
 
     player = pyglet.media.Player()
-    window = PlayerWindow(player)
+    clips = []
+    for filename in args.file:
+        clips += [pyglet.media.load(filename)]
+    window = PlayerWindow(player, clips)
 
-    player.queue(pyglet.media.load(filename) for filename in args.file)
+    # player.queue(pyglet.media.load(filename) for filename in args.file)
 
     window.gui_update_source()
     window.set_visible(True)
     window.set_default_video_size()
 
     # this is an async call
-    player.play()
+    player.pause()
     window.gui_update_state()
 
     pyglet.app.run()
