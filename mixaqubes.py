@@ -53,6 +53,60 @@ class MemorySource(pyglet.media.StaticSource):
 
         self._file.seek(offset)
 
+class Clip():
+    def __init__(self, name, element, bars, bpm, key):
+        self.name = name
+        self.element = element
+        self.bars = bars
+        self.bpm = bpm
+        self.key = key
+        self.bar = 0
+
+    def next_bar(self):
+        current_bar = self.bar
+        self.bar = (self.bar + 1) % len(self.bars)
+        print("playing bar {}".format(current_bar))
+        return self.bars[current_bar]
+
+class MixaPlayer():
+    def __init__(self):
+        player = pyglet.media.Player()
+        self.player = player
+        self._player_playing = False
+        self.player.push_handlers(self)
+        self.clip = None
+
+    def set_clip(self, clip):
+        self.clip = clip
+
+    def play(self):
+        print("mixa play call")
+        if self.clip is not None:
+            print("mixa play go")
+            self.player.queue(self.clip.next_bar())
+            self.player.play()
+            self._player_playing = True
+
+    def has_clip(self):
+        return self.clip is not None
+
+    def on_player_eos(self):
+        print("mixa eos")
+        if self.clip is not None:
+            self.player.queue(self.clip.next_bar())
+            self.player.play()
+        return True
+
+    def on_player_next_source(self):
+        return True
+
+    def on_close(self):
+        self.player.pause()
+        self.close()
+
+    def auto_close(self, dt):
+        self.close()
+
 
 pyglet.options['debug_media'] = False
 # pyglet.options['audio'] = ('openal', 'pulse', 'silent')
@@ -202,7 +256,7 @@ class PlayerWindow(pyglet.window.Window):
     GUI_PADDING = 4
     GUI_BUTTON_HEIGHT = 16
 
-    def __init__(self, player, dir, clips):
+    def __init__(self, dir, clips):
         super(PlayerWindow, self).__init__(caption='Mixaqubes',
                                            visible=False,
                                            resizable=True)
@@ -210,9 +264,12 @@ class PlayerWindow(pyglet.window.Window):
         # We only keep a weakref to player as we are about to push ourself
         # as a handler which would then create a circular reference between
         # player and window.
-        self.player = weakref.proxy(player)
+        player = pyglet.media.Player()
+        self.player = player
         self._player_playing = False
         self.player.push_handlers(self)
+
+        self.mixaplayer = MixaPlayer()
 
         self.slider = Slider(self)
         self.slider.push_handlers(self)
@@ -257,10 +314,8 @@ class PlayerWindow(pyglet.window.Window):
 
         self.clips = clips
         self.clip_names = list(clips.keys())
-        self.active_clip = []
-        self.active_bar = 0
-        self.active_bpm = None
-        self.active_key = None
+        self.active_clip = None
+        self.next_clip = None
 
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -274,11 +329,18 @@ class PlayerWindow(pyglet.window.Window):
     def on_player_eos(self):
         self.gui_update_state()
         # pyglet.clock.schedule_once(self.auto_close, 0.1)
-        if len(self.active_clip) != 0:
-            self.player.queue(self.active_clip[self.active_bar])
-            self.active_bar = (self.active_bar + 1) % len(self.active_clip)
-            print("playing bar {}".format(self.active_bar))
+        if self.active_clip is not None:
+            self.player.queue(self.active_clip.next_bar())
             self.player.play()
+
+            if self.next_clip is not None:
+                print("setting next clip")
+                self.mixaplayer.set_clip(self.next_clip)
+                self.next_clip = None
+
+            if self.mixaplayer.has_clip():
+                self.mixaplayer.play()
+
             self.gui_update_source()
         return True
 
@@ -348,10 +410,10 @@ class PlayerWindow(pyglet.window.Window):
             if control.hit_test(x, y):
                 control.on_mouse_press(x, y, button, modifiers)
 
-    def cache_active_clip(self, name, loop):
-        meta = self.clips[name]["loops"][loop]
+    def set_next_clip(self, name, element):
+        meta = self.clips[name]["loops"][element]
         if meta is not None:
-            media_path = Path(self.dir + "/" + name + "/" + loop + ".wav")
+            media_path = Path(self.dir + "/" + name + "/" + element + ".wav")
             if media_path.exists():
                 loop = pyglet.media.load(media_path)
                 sample_rate = loop.audio_format.sample_rate
@@ -359,8 +421,6 @@ class PlayerWindow(pyglet.window.Window):
 
                 bpm = float(self.clips[name]["bpm"])
                 print("bpm: {}".format(bpm))
-                self.active_bpm = bpm
-                self.active_key = self.clips[name]["key"]
 
                 samples_per_beat = round((60.0 / bpm) * sample_rate)
                 print("samples per beat: {}".format(samples_per_beat))
@@ -372,20 +432,20 @@ class PlayerWindow(pyglet.window.Window):
                 full_loop = loop.get_audio_data(int(samples_per_beat * bytes_per_sample * beats))
                 print("full loop len: ", len(full_loop.data))
                 bars_raw = [full_loop.data[i:i+bytes_per_bar] for i in range(0, len(full_loop.data), bytes_per_bar)]
-                self.active_clip = []
+                bars = []
                 for bar_raw in bars_raw:
                     print("slicing bar of {} bytes".format(len(bar_raw)))
-                    self.active_clip += [
+                    bars += [
                         MemorySource(bar_raw, loop.audio_format)
                     ]
-                self.active_bar = 0
 
+                clip = Clip(name, element, bars, bpm, self.clips[name]["key"])
                 # one_bar = loop.get_audio_data(int(samples_per_bar * bytes_per_sample))
                 # print("one bar bytes: {}".format(one_bar.length))
 
                 # self.active_clip = MemorySource(one_bar.data, loop.audio_format)
                 # 1498560 bytes -> 93,660 bytes/beat -> 374640 bytes/bar
-                return (name, loop)
+                return (clip, name, element)
             else:
                 print("invalid media path: {}".format(media_path))
                 exit(0)
@@ -404,32 +464,39 @@ class PlayerWindow(pyglet.window.Window):
             self.player.next_source()
         elif symbol == key._1:
             print("got 1")
-            (name, loop) = self.cache_active_clip(self.clip_names[0], "basic")
+            (clip, name, loop) = self.set_next_clip(self.clip_names[0], "basic")
+            self.next_clip = clip
             print("set active clip to {}/{}".format(name, loop))
         elif symbol == key._2:
             print("got 2")
-            (name, loop) = self.cache_active_clip(self.clip_names[0], "pre-drop")
+            (clip, name, loop) = self.set_next_clip(self.clip_names[0], "pre-drop")
+            self.next_clip = clip
             print("set active clip to {}/{}".format(name, loop))
         elif symbol == key._3:
             print("got 3")
-            (name, loop) = self.cache_active_clip(self.clip_names[0], "drop")
+            (clip, name, loop) = self.set_next_clip(self.clip_names[0], "drop")
+            self.next_clip = clip
             print("set active clip to {}/{}".format(name, loop))
         elif symbol == key._4:
             print("got 4")
-            (name, loop) = self.cache_active_clip(self.clip_names[1], "intro")
+            (clip, name, loop) = self.set_next_clip(self.clip_names[1], "intro")
+            self.next_clip = clip
             print("set active clip to {}/{}".format(name, loop))
         elif symbol == key._5:
             print("got 5")
-            (name, loop) = self.cache_active_clip(self.clip_names[1], "intro2")
+            (clip, name, loop) = self.set_next_clip(self.clip_names[1], "intro2")
+            self.next_clip = clip
             print("set active clip to {}/{}".format(name, loop))
         elif symbol == key._6:
             print("got 6")
-            (name, loop) = self.cache_active_clip(self.clip_names[1], "mid")
+            (clip, name, loop) = self.set_next_clip(self.clip_names[1], "mid")
+            self.next_clip = clip
             print("set active clip to {}/{}".format(name, loop))
-        if self.player.playing == False and len(self.active_clip) != 0:
+        if self.player.playing == False and self.active_clip is None and self.next_clip is not None:
+            self.active_clip = self.next_clip
+            self.next_clip = None
             print("bootstrapping play queue")
-            self.player.queue(self.active_clip[self.active_bar])
-            self.active_bar = (self.active_bar + 1) % len(self.active_clip)
+            self.player.queue(self.active_clip.next_bar())
             self.player.play()
             self.gui_update_source()
 
@@ -500,9 +567,7 @@ def main():
     #print(clips)
     #for filename in args.file:
     #    clips += [pyglet.media.load(filename)]
-
-    player = pyglet.media.Player()
-    window = PlayerWindow(player, args.directory, clips)
+    window = PlayerWindow(args.directory, clips)
 
     # player.queue(pyglet.media.load(filename) for filename in args.file)
 
@@ -511,7 +576,7 @@ def main():
     window.set_default_video_size()
 
     # this is an async call
-    player.pause()
+    # player.pause()
     window.gui_update_state()
 
     pyglet.app.run()
