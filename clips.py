@@ -2,8 +2,9 @@ import pyglet
 import io
 import torch
 import numpy as np
+import torchaudio
 
-DEVICE="cuda" if torch.cuda.is_available() else "cpu"
+DEVICE="cpu" # "cuda" if torch.cuda.is_available() else "cpu"
 
 class MemorySource(pyglet.media.StaticSource):
     """
@@ -58,10 +59,13 @@ class Clip():
         self.key = key
         self.bar = 0
 
+        # extract the audio format / sample rate - requires at least one bar of data!
+        self.audio_format = bars[0].audio_format
+
         # this controls the magnitude of the current effect
         self.magnitude = 1.0
         # this is a list of effects to be applied
-        self.effects = [FadeIn()]
+        self.effects = [FadeIn(), LowCut(self.audio_format.sample_rate)]
         # this is the current state of the clip
         self.state = "cued"
 
@@ -86,7 +90,6 @@ class Clip():
 
     # mem_source is a MemorySource
     def to_torch(self, mem_source):
-        self.audio_format = mem_source.audio_format
         raw_ints = np.frombuffer(mem_source._data, dtype=np.int16)
         a = raw_ints[::2]
         b = raw_ints[1::2]
@@ -133,3 +136,27 @@ class FadeIn():
 
         self.step()
         return proc
+
+class LowCut():
+    def __init__(self, sample_rate):
+        self.db = -20.0
+        self.frequency = 100.0 # in Hz
+        self.sample_rate = sample_rate
+        self.done = False
+    def process(self, torchdata):
+        print("lowcut start")
+        norm = abs(torchdata.max())
+        torchdata = torchdata / norm
+        proc = torchaudio.functional.bass_biquad(
+            torchdata,
+            self.sample_rate,
+            self.db,
+            self.frequency,
+            0.707
+        )
+        proc = proc * norm
+        print("lowcut stop")
+        self.done = True
+        return proc
+    def is_done(self):
+        return self.done
