@@ -23,6 +23,34 @@ pyglet.options['debug_media'] = False
 # pyglet.options['audio'] = ('openal', 'pulse', 'silent')
 from pyglet.media import buffered_logger as bl
 
+from collections import deque
+
+def find_zero_crossing(samples):
+    # samples are interleaved int16's
+    search_distance = 800
+    zero_thresh = 200
+    found_zero = False
+
+    lsample = int.from_bytes(samples[:2], 'little')
+    rsample = int.from_bytes(samples[2:4], 'little')
+    if (abs(lsample) < zero_thresh) and (abs(rsample) < zero_thresh):
+        found_zero = True
+
+    index = 0
+    while found_zero is False and index < search_distance:
+        # this skips the very last sample because of the special-case of no index is annoying to compute
+        lsample = int.from_bytes(samples[-6 - index:-4 - index], 'little')
+        rsample = int.from_bytes(samples[-8 - index:-6 - index], 'little')
+        if (abs(lsample) < zero_thresh) and (abs(rsample) < zero_thresh):
+            found_zero = True
+        else:
+            index += 4
+
+    if found_zero is False:
+        index = 0
+
+    print("zero found at offset -{}".format(index))
+    return samples[-8 - index:] + samples[: -8 - index]
 
 def draw_rect(x, y, width, height, color=(192, 192, 192, 192)):
     pyglet.graphics.draw(
@@ -250,7 +278,7 @@ class PlayerWindow(pyglet.window.Window):
 
             self.player.queue(active_bar)
             if next_bar:
-                print("mix in")
+                # print("mix in")
                 self.mixaplayer.next_source() # discard any current track playing
                 self.mixaplayer.queue(next_bar)
                 self.mixaplayer.play()
@@ -345,12 +373,13 @@ class PlayerWindow(pyglet.window.Window):
 
                 full_loop = loop.get_audio_data(int(samples_per_beat * bytes_per_sample * beats))
                 print("full loop len: ", len(full_loop.data))
-                bars_raw = [full_loop.data[i:i+bytes_per_bar] for i in range(0, len(full_loop.data), bytes_per_bar)]
+                rotated = find_zero_crossing(full_loop.data)
+                bars_raw = [rotated[i:i+bytes_per_bar] for i in range(0, len(rotated), bytes_per_bar)]
                 bars = []
                 for bar_raw in bars_raw:
                     print("slicing bar of {} bytes".format(len(bar_raw)))
                     bars += [
-                        MemorySource(bar_raw, loop.audio_format)
+                        MemorySource(bytes(bar_raw), loop.audio_format)
                     ]
 
                 clip = Clip(name, element, bars, bpm, self.clips[name]["key"])

@@ -73,7 +73,7 @@ class Clip():
     # then play them all at once.
     def next_bar(self):
         current_bar = self.bar
-        print("computing bar {} of {}".format(current_bar, self.name))
+        # print("computing bar {} of {}".format(current_bar, self.name))
 
         # apply any effects via the pytorch pipeline
         torchdata = self.to_torch(self.bars[current_bar])
@@ -113,7 +113,7 @@ class Clip():
 class FadeIn():
     def __init__(self):
         self.gain = -30.0
-        self.increment = 10.0
+        self.increment = 5.0
     def step(self):
         self.gain += self.increment
         if self.gain > 0.0:
@@ -124,6 +124,7 @@ class FadeIn():
         else:
             return False
     def process(self, torchdata):
+        print("fade in {}".format(self.gain))
         start_ratio = 10 ** (self.gain / 20)
         end_gain = self.gain + self.increment
         if end_gain > 0.0:
@@ -139,12 +140,14 @@ class FadeIn():
 
 class LowCut():
     def __init__(self, sample_rate):
-        self.db = -20.0
-        self.frequency = 100.0 # in Hz
+        self.db = -26.0
+        self.frequency = 280.0 # in Hz
         self.sample_rate = sample_rate
+        self.duration_bars = 2
+        self.state = 0
         self.done = False
     def process(self, torchdata):
-        print("lowcut start")
+        print("lowcut {}".format(self.state))
         norm = abs(torchdata.max())
         torchdata = torchdata / norm
         proc = torchaudio.functional.bass_biquad(
@@ -155,8 +158,9 @@ class LowCut():
             0.707
         )
         proc = proc * norm
-        print("lowcut stop")
-        self.done = True
+        self.state += 1
+        if self.state >= self.duration_bars:
+            self.done = True
         return proc
     def is_done(self):
         return self.done
