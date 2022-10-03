@@ -17,96 +17,7 @@ from pyglet.window import key
 import json
 from pathlib import Path
 
-import io
-class MemorySource(pyglet.media.StaticSource):
-    """
-    Helper class for default implementation of :class:`.StaticSource`.
-
-    Do not use directly. This class is used internally by pyglet.
-
-    Args:
-        data (AudioData): The audio data.
-        audio_format (AudioFormat): The audio format.
-    """
-
-    def __init__(self, data, audio_format):
-        """Construct a memory source over the given data buffer."""
-        self._file = io.BytesIO(data)
-        self._data = self._file.getvalue()
-        self._max_offset = len(data)
-        self.audio_format = audio_format
-        self._duration = len(data) / float(audio_format.bytes_per_second)
-
-    def seek(self, timestamp):
-        """Seek to given timestamp.
-
-        Args:
-            timestamp (float): Time where to seek in the source.
-        """
-        offset = int(timestamp * self.audio_format.bytes_per_second)
-
-        # Align to sample
-        if self.audio_format.bytes_per_sample == 2:
-            offset &= 0xfffffffe
-        elif self.audio_format.bytes_per_sample == 4:
-            offset &= 0xfffffffc
-
-        self._file.seek(offset)
-
-class Clip():
-    def __init__(self, name, element, bars, bpm, key):
-        self.name = name
-        self.element = element
-        self.bars = bars
-        self.bpm = bpm
-        self.key = key
-        self.bar = 0
-
-    def next_bar(self):
-        current_bar = self.bar
-        self.bar = (self.bar + 1) % len(self.bars)
-        print("playing bar {}".format(current_bar))
-        return self.bars[current_bar]
-
-class MixaPlayer():
-    def __init__(self):
-        player = pyglet.media.Player()
-        self.player = player
-        self._player_playing = False
-        self.player.push_handlers(self)
-        self.clip = None
-
-    def set_clip(self, clip):
-        self.clip = clip
-
-    def play(self):
-        print("mixa play call")
-        if self.clip is not None:
-            print("mixa play go")
-            self.player.queue(self.clip.next_bar())
-            self.player.play()
-            self._player_playing = True
-
-    def has_clip(self):
-        return self.clip is not None
-
-    def on_player_eos(self):
-        print("mixa eos")
-        if self.clip is not None:
-            self.player.queue(self.clip.next_bar())
-            self.player.play()
-        return True
-
-    def on_player_next_source(self):
-        return True
-
-    def on_close(self):
-        self.player.pause()
-        self.close()
-
-    def auto_close(self, dt):
-        self.close()
-
+from clips import Clip, MemorySource
 
 pyglet.options['debug_media'] = False
 # pyglet.options['audio'] = ('openal', 'pulse', 'silent')
@@ -269,7 +180,7 @@ class PlayerWindow(pyglet.window.Window):
         self._player_playing = False
         self.player.push_handlers(self)
 
-        self.mixaplayer = MixaPlayer()
+        self.mixaplayer = pyglet.media.Player()
 
         self.slider = Slider(self)
         self.slider.push_handlers(self)
@@ -330,17 +241,20 @@ class PlayerWindow(pyglet.window.Window):
         self.gui_update_state()
         # pyglet.clock.schedule_once(self.auto_close, 0.1)
         if self.active_clip is not None:
-            self.player.queue(self.active_clip.next_bar())
-            self.player.play()
+            active_bar = self.active_clip.next_bar()
 
             if self.next_clip is not None:
-                print("setting next clip")
-                self.mixaplayer.set_clip(self.next_clip)
-                self.next_clip = None
+                next_bar = self.next_clip.next_bar()
+            else:
+                next_bar = None
 
-            if self.mixaplayer.has_clip():
+            self.player.queue(active_bar)
+            if next_bar:
+                print("mix in")
+                self.mixaplayer.next_source() # discard any current track playing
+                self.mixaplayer.queue(next_bar)
                 self.mixaplayer.play()
-
+            self.player.play()
             self.gui_update_source()
         return True
 
@@ -466,32 +380,32 @@ class PlayerWindow(pyglet.window.Window):
             print("got 1")
             (clip, name, loop) = self.set_next_clip(self.clip_names[0], "basic")
             self.next_clip = clip
-            print("set active clip to {}/{}".format(name, loop))
+            print("selecting {}/{}".format(name, loop))
         elif symbol == key._2:
             print("got 2")
             (clip, name, loop) = self.set_next_clip(self.clip_names[0], "pre-drop")
             self.next_clip = clip
-            print("set active clip to {}/{}".format(name, loop))
+            print("selecting {}/{}".format(name, loop))
         elif symbol == key._3:
             print("got 3")
             (clip, name, loop) = self.set_next_clip(self.clip_names[0], "drop")
             self.next_clip = clip
-            print("set active clip to {}/{}".format(name, loop))
+            print("selecting {}/{}".format(name, loop))
         elif symbol == key._4:
             print("got 4")
             (clip, name, loop) = self.set_next_clip(self.clip_names[1], "intro")
             self.next_clip = clip
-            print("set active clip to {}/{}".format(name, loop))
+            print("selecting {}/{}".format(name, loop))
         elif symbol == key._5:
             print("got 5")
             (clip, name, loop) = self.set_next_clip(self.clip_names[1], "intro2")
             self.next_clip = clip
-            print("set active clip to {}/{}".format(name, loop))
+            print("selecting {}/{}".format(name, loop))
         elif symbol == key._6:
             print("got 6")
             (clip, name, loop) = self.set_next_clip(self.clip_names[1], "mid")
             self.next_clip = clip
-            print("set active clip to {}/{}".format(name, loop))
+            print("selecting {}/{}".format(name, loop))
         if self.player.playing == False and self.active_clip is None and self.next_clip is not None:
             self.active_clip = self.next_clip
             self.next_clip = None
